@@ -335,8 +335,7 @@ async function runLg(event, action, options) {
   if (passphrase) {
     device = await configureLgDevice(event, ip, options.deviceName, passphrase);
   } else {
-    const existingDevice = await findExistingLgDeviceWithPrivateKey(options.deviceName, ip);
-    device = existingDevice?.deviceName || requireValue(options.deviceName || ip, "LG device name/IP");
+    device = await resolveExistingLgDevice(event, options.deviceName, ip);
   }
   const aresInstall = await resolveCommand("ares-install");
   if (!aresInstall) {
@@ -365,27 +364,46 @@ function defaultLgDeviceName(ip) {
   return `nuvio-lg-${String(ip || "").trim().replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "tv"}`;
 }
 
-async function findExistingLgDeviceWithPrivateKey(deviceName, host) {
+function lgDeviceInfoArgs(host) {
+  return [
+    "--info", "username=prisoner",
+    "--info", `host=${host}`,
+    "--info", "port=9922",
+    "--info", "default=true"
+  ];
+}
+
+async function readLgDevices() {
   const devicesPath = path.join(os.homedir(), ".webos", "tv", "novacom-devices.json");
-  let devices;
 
   try {
-    devices = JSON.parse(await fsp.readFile(devicesPath, "utf8"));
+    const devices = JSON.parse(await fsp.readFile(devicesPath, "utf8"));
+    return Array.isArray(devices) ? devices : [];
   } catch {
-    return null;
+    return [];
   }
+}
 
+async function findExistingLgDeviceWithPrivateKey(deviceName, host, options = {}) {
+  const devices = await readLgDevices();
   const normalizedDeviceName = String(deviceName || "").trim();
   const normalizedHost = String(host || "").trim();
-  const matches = Array.isArray(devices)
-    ? devices.filter((entry) => (
-        entry
-        && (!normalizedHost || String(entry.host || "") === normalizedHost)
-        && entry.privateKey
-        && entry.privateKey.openSsh
-      ))
-    : [];
-  const device = matches.find((entry) => entry.name === normalizedDeviceName) || matches[0];
+  const devicesWithKeys = devices.filter((entry) => entry?.privateKey?.openSsh);
+  const hostMatches = normalizedHost
+    ? devicesWithKeys.filter((entry) => String(entry.host || "") === normalizedHost)
+    : devicesWithKeys;
+
+  let device = normalizedDeviceName
+    ? hostMatches.find((entry) => entry.name === normalizedDeviceName)
+    : null;
+
+  if (!device && options.allowDifferentHostForName && normalizedDeviceName) {
+    device = devicesWithKeys.find((entry) => entry.name === normalizedDeviceName);
+  }
+
+  if (!device) {
+    device = hostMatches[0];
+  }
 
   if (!device) {
     return null;
@@ -396,11 +414,37 @@ async function findExistingLgDeviceWithPrivateKey(deviceName, host) {
     await fsp.access(keyPath, fs.constants.R_OK);
     return {
       deviceName: device.name,
+      host: String(device.host || ""),
       keyPath
     };
   } catch {
     return null;
   }
+}
+
+async function resolveExistingLgDevice(event, requestedDeviceName, ip) {
+  const deviceName = String(requestedDeviceName || "").trim();
+  const host = String(ip || "").trim();
+  const existingDevice = await findExistingLgDeviceWithPrivateKey(deviceName, host, {
+    allowDifferentHostForName: Boolean(deviceName && host)
+  });
+
+  if (!existingDevice) {
+    return requireValue(deviceName || host, "LG device name/IP");
+  }
+
+  if (deviceName && host && existingDevice.deviceName === deviceName && existingDevice.host !== host) {
+    const aresSetupDevice = await resolveCommand("ares-setup-device");
+    if (!aresSetupDevice) {
+      throw new Error("ares-setup-device was not found in the app package.");
+    }
+
+    emit(event, { type: "info", text: `Updating LG device profile "${deviceName}" from ${existingDevice.host || "unknown host"} to ${host}.` });
+    await runCommand(event, aresSetupDevice, ["--modify", deviceName, ...lgDeviceInfoArgs(host)]);
+    emit(event, { type: "success", text: "LG device IP updated." });
+  }
+
+  return existingDevice.deviceName;
 }
 
 async function configureLgDevice(event, ip, requestedDeviceName, passphrase) {
@@ -414,13 +458,7 @@ async function configureLgDevice(event, ip, requestedDeviceName, passphrase) {
   }
 
   emit(event, { type: "info", text: `Automatically configuring LG webOS device: ${deviceName}` });
-
-  const deviceInfoArgs = [
-    "--info", "username=prisoner",
-    "--info", `host=${host}`,
-    "--info", "port=9922",
-    "--info", "default=true"
-  ];
+  const deviceInfoArgs = lgDeviceInfoArgs(host);
 
   try {
     await runCommand(event, aresSetupDevice, ["--add", deviceName, ...deviceInfoArgs]);

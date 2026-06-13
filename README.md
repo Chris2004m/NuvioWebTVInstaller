@@ -111,6 +111,7 @@ ares-launch
 ```
 
 If the TV was already configured in the past, you can also enter only the device name or IP and leave the passphrase empty.
+If you enter an existing LG device name with a new TV IP, the installer updates that local webOS device profile before installing.
 
 Note: `@webos-tools/cli` brings many transitive npm dependencies. This does not mean the app is automatically dangerous, but it increases maintenance, package size, and the chance of antivirus false positives. For clean public distribution, app signing is still recommended.
 
