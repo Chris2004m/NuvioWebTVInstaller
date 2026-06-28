@@ -786,6 +786,14 @@ function throwIfSamsungOutputFailed(output, context) {
     .find((line) => /install failed|uninstall failed|download failed|check certificate error|error/i.test(line));
 
   if (failedLine) {
+    if (/install failed\[118\]/i.test(failedLine) || /check certificate error/i.test(failedLine)) {
+      throw new Error(
+        `${context}: ${failedLine}\n\nSamsung TV rejected the signed package. ` +
+        "This usually means the package was not signed with a Samsung TV certificate profile trusted by this TV. " +
+        "Try importing/selecting the Samsung TV certificate profile created by Tizen Studio Certificate Manager, " +
+        "or sign the WGT with Tizen Studio and install that package manually."
+      );
+    }
     throw new Error(`${context}: ${failedLine}`);
   }
 }
@@ -1033,6 +1041,19 @@ async function readManualSamsungCertificateConfig(options) {
     return null;
   }
 
+  const profileName = String(manual.profileName || "").trim();
+  if (profileName) {
+    return {
+      authorCert: "",
+      distributorCert: "",
+      distributorXML: "",
+      password: "",
+      profileName,
+      duid: "",
+      createdAt: new Date().toISOString()
+    };
+  }
+
   const authorPath = requireValue(manual.authorPath, "Samsung author certificate");
   const distributorPath = requireValue(manual.distributorPath, "Samsung distributor certificate");
   const password = requireValue(manual.password, "Samsung certificate password");
@@ -1042,6 +1063,7 @@ async function readManualSamsungCertificateConfig(options) {
     distributorCert: (await fsp.readFile(distributorPath)).toString("base64"),
     distributorXML: "",
     password,
+    profileName: "",
     duid: "",
     createdAt: new Date().toISOString()
   };
@@ -1257,6 +1279,10 @@ async function findSamsungInstalledApp(event, transport, identifiers) {
 }
 
 async function resignTizenPackageWithSamsungCertificate(event, packagePath, certificateConfig) {
+  if (certificateConfig?.profileName) {
+    return signTizenPackageWithStudioProfile(event, packagePath, certificateConfig.profileName);
+  }
+
   emit(event, { type: "info", text: "Automatically signing the WGT with the saved Samsung certificate." });
 
   const zip = await JSZip.loadAsync(fs.readFileSync(packagePath));
@@ -1295,6 +1321,49 @@ async function resignTizenPackageWithSamsungCertificate(event, packagePath, cert
 
   emit(event, { type: "info", text: `Automatically signed WGT: ${resignedPackage}` });
   return resignedPackage;
+}
+
+async function signTizenPackageWithStudioProfile(event, packagePath, profileName) {
+  const tizen = await resolveCommand("tizen");
+  if (!tizen) {
+    throw new Error("Tizen Studio CLI was not found. Install Tizen Studio or leave the profile name empty to use the built-in signer.");
+  }
+
+  emit(event, { type: "info", text: `Signing WGT with Tizen Studio security profile "${profileName}".` });
+  const parsed = path.parse(packagePath);
+  const workRoot = path.join(app.getPath("temp"), `nuvio-tizen-sign-${Date.now()}`);
+  const unpackDir = path.join(workRoot, "package");
+  const outputDir = path.join(workRoot, "out");
+  await fsp.mkdir(unpackDir, { recursive: true });
+  await fsp.mkdir(outputDir, { recursive: true });
+
+  const zip = await JSZip.loadAsync(fs.readFileSync(packagePath));
+  await Promise.all(Object.keys(zip.files).map(async (filename) => {
+    const file = zip.files[filename];
+    if (file.dir || filename === "author-signature.xml" || filename === "signature1.xml") {
+      return;
+    }
+    const targetPath = path.join(unpackDir, filename);
+    await fsp.mkdir(path.dirname(targetPath), { recursive: true });
+    await fsp.writeFile(targetPath, await file.async("nodebuffer"));
+  }));
+
+  await runCommand(event, tizen, ["package", "-t", "wgt", "-s", profileName, "-o", outputDir, "--", unpackDir], {
+    cwd: workRoot
+  });
+
+  const signedCandidates = (await fsp.readdir(outputDir))
+    .filter((entry) => entry.toLowerCase().endsWith(".wgt"))
+    .map((entry) => path.join(outputDir, entry));
+  if (!signedCandidates.length) {
+    throw new Error("Tizen Studio signing completed but no signed WGT was produced.");
+  }
+
+  const outputPath = path.join(app.getPath("userData"), "resigned", `${parsed.name}-tizen-studio-signed-${Date.now()}${parsed.ext || ".wgt"}`);
+  await fsp.mkdir(path.dirname(outputPath), { recursive: true });
+  await fsp.copyFile(signedCandidates[0], outputPath);
+  emit(event, { type: "info", text: `Tizen Studio signed WGT: ${outputPath}` });
+  return outputPath;
 }
 
 async function prepareSamsungPackage(event, transport, packagePath, options = {}) {

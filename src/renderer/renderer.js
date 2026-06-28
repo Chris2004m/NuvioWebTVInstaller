@@ -37,6 +37,7 @@ const packagePathInput = document.getElementById('packagePath');
 const authorCertPathInput = document.getElementById('authorCertPath');
 const distributorCertPathInput = document.getElementById('distributorCertPath');
 const certPasswordInput = document.getElementById('certPassword');
+const certProfileNameInput = document.getElementById('certProfileName');
 const logOutput = document.getElementById('log-output');
 let localIps = [];
 let showHostPcIp = false;
@@ -279,7 +280,8 @@ async function runAction(action) {
       auto: autoGenerateCert.checked,
       authorPath: authorCertPathInput.value,
       distributorPath: distributorCertPathInput.value,
-      password: certPasswordInput.value
+      password: certPasswordInput.value,
+      profileName: certProfileNameInput.value
     }
   };
 
