@@ -29,12 +29,14 @@ To build the package:
 ```bash
 npm run dist:win
 npm run dist:mac
+npm run dist:linux
 ```
 
 With the current configuration, standalone runnable apps are generated without an installer:
 
 - `dist/Nuvio-WebTV-Installer-<version>-Windows.exe` for Windows
 - `dist/mac-arm64/Nuvio WebTV Installer.app` for macOS Apple Silicon
+- `dist/Nuvio-WebTV-Installer-<version>-Linux.AppImage` for Linux x64
 
 ## App Packages
 
