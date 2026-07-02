@@ -226,7 +226,11 @@ function captureCommand(event, command, args, options = {}) {
       if (code === 0) {
         finish(null, { stdout, stderr });
       } else {
-        finish(new Error(`${command} exited with code ${code}`));
+        const error = new Error(`${command} exited with code ${code}`);
+        error.code = code;
+        error.stdout = stdout;
+        error.stderr = stderr;
+        finish(error);
       }
     });
   });
@@ -673,6 +677,43 @@ async function runSamsungShell(event, transport, args, options = {}) {
   return result.stdout;
 }
 
+function isSamsungShellClosedOutput(output) {
+  return String(output || "")
+    .split(/\r?\n/)
+    .some((line) => line.trim().toLowerCase() === "closed");
+}
+
+function isSamsungShellClosedError(error) {
+  return isSamsungShellClosedOutput(error?.stdout)
+    || isSamsungShellClosedOutput(error?.stderr)
+    || /\bclosed\b/i.test(String(error?.message || ""));
+}
+
+async function ensureSamsungTempDirectory(event, transport) {
+  try {
+    const output = await runSamsungShell(event, transport, ["0", "mkdir", "-p", "/home/owner/share/tmp/sdk_tools"], {
+      noOutputSuccessMs: 1500
+    });
+    if (isSamsungShellClosedOutput(output)) {
+      emit(event, {
+        type: "info",
+        text: "Samsung TV closed the generic shell setup command; continuing with direct push and vd_appinstall."
+      });
+      return false;
+    }
+    return true;
+  } catch (error) {
+    if (isSamsungShellClosedError(error)) {
+      emit(event, {
+        type: "info",
+        text: "Samsung TV closed the generic shell setup command; continuing with direct push and vd_appinstall."
+      });
+      return false;
+    }
+    throw error;
+  }
+}
+
 function pushFileAdb(adbClient, remotePath, data) {
   return new Promise((resolve, reject) => {
     const shell = adbClient.createStream("sync:");
@@ -757,11 +798,32 @@ async function pushSamsungFile(event, transport, localPath, remotePath) {
 
 async function verifySamsungRemotePackage(event, transport, localPath, remotePath) {
   const expectedSize = fs.statSync(localPath).size;
-  const output = await runSamsungShell(event, transport, ["ls", "-l", remotePath], {
-    idleAfterDataMs: 800,
-    noOutputSuccessMs: transport.type === "adb" ? 2500 : 0,
-    timeoutMs: 10000
-  });
+  let output = "";
+  try {
+    output = await runSamsungShell(event, transport, ["ls", "-l", remotePath], {
+      idleAfterDataMs: 800,
+      noOutputSuccessMs: transport.type === "adb" ? 2500 : 0,
+      timeoutMs: 10000
+    });
+  } catch (error) {
+    if (isSamsungShellClosedError(error)) {
+      emit(event, {
+        type: "info",
+        text: "Samsung package upload check was closed by the TV; continuing because the push command completed."
+      });
+      return;
+    }
+    throw error;
+  }
+
+  if (isSamsungShellClosedOutput(output)) {
+    emit(event, {
+      type: "info",
+      text: "Samsung package upload check was closed by the TV; continuing because the push command completed."
+    });
+    return;
+  }
+
   const remoteSize = Number(String(output || "").trim().split(/\s+/)[4] || 0);
 
   if (!remoteSize && transport.type === "adb") {
@@ -783,9 +845,12 @@ function throwIfSamsungOutputFailed(output, context) {
   const failedLine = String(output || "")
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .find((line) => /install failed|uninstall failed|download failed|check certificate error|error/i.test(line));
+    .find((line) => /install failed|uninstall failed|download failed|check certificate error|error/i.test(line) || line.toLowerCase() === "closed");
 
   if (failedLine) {
+    if (failedLine.toLowerCase() === "closed") {
+      throw new Error(`${context}: Samsung TV closed the shell command before installation completed.`);
+    }
     if (/install failed\[118\]/i.test(failedLine) || /check certificate error/i.test(failedLine)) {
       throw new Error(
         `${context}: ${failedLine}\n\nSamsung TV rejected the signed package. ` +
@@ -1027,8 +1092,15 @@ async function createSamsungCertificateForTarget(event, transport, knownDuid = "
   if (certificate.distributorXML) {
     const profilePath = path.join(app.getPath("userData"), "samsung-certificates", `${String(transport.target).replace(/[^a-z0-9_.-]+/gi, "_")}-device-profile.xml`);
     await fsp.writeFile(profilePath, certificate.distributorXML, "utf8");
-    await runSamsungShell(event, transport, ["mkdir", "-p", "/home/owner/share/tmp/sdk_tools"], { noOutputSuccessMs: 1500 });
-    await pushSamsungFile(event, transport, profilePath, "/home/owner/share/tmp/sdk_tools/device-profile.xml");
+    try {
+      await ensureSamsungTempDirectory(event, transport);
+      await pushSamsungFile(event, transport, profilePath, "/home/owner/share/tmp/sdk_tools/device-profile.xml");
+    } catch (error) {
+      emit(event, {
+        type: "info",
+        text: `Skipping Samsung device profile upload because the TV rejected the helper path: ${error?.message || String(error)}`
+      });
+    }
   }
 
   emit(event, { type: "success", text: "Samsung certificate created and saved for this TV." });
@@ -1386,8 +1458,21 @@ async function installSamsungPackage(event, transport, packagePath) {
     emit(event, { type: "info", text: `Detected application id: ${metadata.appId}` });
   }
 
-  await runSamsungShell(event, transport, ["0", "mkdir", "-p", "/home/owner/share/tmp/sdk_tools"], { noOutputSuccessMs: 1500 });
-  await runSamsungShell(event, transport, ["0", "rm", "-f", remotePath], { noOutputSuccessMs: 1500 }).catch(() => null);
+  const shellSetupAvailable = await ensureSamsungTempDirectory(event, transport);
+  if (shellSetupAvailable) {
+    const cleanupOutput = await runSamsungShell(event, transport, ["0", "rm", "-f", remotePath], { noOutputSuccessMs: 1500 }).catch((error) => {
+      if (isSamsungShellClosedError(error)) {
+        return "closed";
+      }
+      return "";
+    });
+    if (isSamsungShellClosedOutput(cleanupOutput)) {
+      emit(event, {
+        type: "info",
+        text: "Samsung TV closed the cleanup shell command; continuing because push can overwrite the package."
+      });
+    }
+  }
   await pushSamsungFile(event, transport, packagePath, remotePath);
   await verifySamsungRemotePackage(event, transport, packagePath, remotePath);
 

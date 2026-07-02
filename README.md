@@ -77,6 +77,19 @@ The installer tries to:
 3. install it with `vd_appinstall`, like TizenBrew/TizenBrewInstaller;
 4. use `sdb` or `tizen` fallbacks only when available.
 
+Some Samsung TVs close generic shell setup commands such as `mkdir` or `ls` with
+`closed`, while still accepting a direct WGT upload and `vd_appinstall`. When
+that happens, the installer skips the optional shell setup/checks and continues
+with the direct upload path.
+
+Manual equivalent for affected TVs:
+
+```sh
+sdb connect <tv-ip>:26101
+sdb -s <tv-ip>:26101 push /absolute/path/to/signed.wgt /home/owner/share/tmp/sdk_tools/signed.wgt
+sdb -s <tv-ip>:26101 shell 0 vd_appinstall NuvioTV001.NuvioTV /home/owner/share/tmp/sdk_tools/signed.wgt
+```
+
 ### Samsung Signing
 
 The installer uses the same approach as TizenBrewInstaller:
