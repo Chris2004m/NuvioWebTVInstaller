@@ -248,21 +248,26 @@ async function runAction(action) {
     return;
   }
 
-  const ip = document.getElementById('ip').value;
-  const deviceName = document.getElementById('deviceName').value;
-  const lgPassphrase = document.getElementById('lgPassphrase').value;
+  const ip = document.getElementById('ip').value.trim();
+  const deviceName = document.getElementById('deviceName').value.trim();
+  const lgPassphrase = document.getElementById('lgPassphrase').value.trim();
   const packagePath = packagePathInput.value;
-
-  if (!ip) {
-    appendLog("Error: TV IP Address is required.", "error");
-    return;
-  }
 
   // Determine target OS based on state or heuristics if multi
   let targetOs = state.os;
   if (targetOs === 'multi') {
     // Very simple heuristic: if passphrase is provided, assume LG
-    targetOs = lgPassphrase ? 'lg' : 'samsung';
+    targetOs = lgPassphrase || deviceName ? 'lg' : 'samsung';
+  }
+
+  if (targetOs === 'samsung' && !ip) {
+    appendLog("Error: TV IP Address is required for Samsung.", "error");
+    return;
+  }
+
+  if (targetOs === 'lg' && lgPassphrase && !ip) {
+    appendLog("Error: TV IP Address is required to configure a new LG webOS device.", "error");
+    return;
   }
 
   if (state.mode === 'custom' && action === 'install' && !packagePath) {
@@ -297,7 +302,7 @@ async function runAction(action) {
       setActionInProgress(false);
     }
   } else {
-    appendLog(`[MOCK] Running ${action} on ${targetOs} with IP ${ip}`, 'command');
+    appendLog(`[MOCK] Running ${action} on ${targetOs} with ${ip || 'saved/default device'}`, 'command');
   }
 }
 

@@ -388,6 +388,10 @@ async function readLgDevices() {
   }
 }
 
+function isDefaultLgDevice(entry) {
+  return entry?.default === true || String(entry?.default || "").toLowerCase() === "true";
+}
+
 async function findExistingLgDeviceWithPrivateKey(deviceName, host, options = {}) {
   const devices = await readLgDevices();
   const normalizedDeviceName = String(deviceName || "").trim();
@@ -403,6 +407,10 @@ async function findExistingLgDeviceWithPrivateKey(deviceName, host, options = {}
 
   if (!device && options.allowDifferentHostForName && normalizedDeviceName) {
     device = devicesWithKeys.find((entry) => entry.name === normalizedDeviceName);
+  }
+
+  if (!device && !normalizedDeviceName && !normalizedHost) {
+    device = hostMatches.find(isDefaultLgDevice);
   }
 
   if (!device) {
@@ -434,7 +442,17 @@ async function resolveExistingLgDevice(event, requestedDeviceName, ip) {
   });
 
   if (!existingDevice) {
+    if (!deviceName && !host) {
+      throw new Error("No saved LG webOS device profile found. Enter the TV IP and Developer Mode passphrase once, or enter an existing Ares device name.");
+    }
     return requireValue(deviceName || host, "LG device name/IP");
+  }
+
+  if (!deviceName && !host) {
+    const deviceLabel = existingDevice.host
+      ? `${existingDevice.deviceName} (${existingDevice.host})`
+      : existingDevice.deviceName;
+    emit(event, { type: "info", text: `Using saved LG webOS device profile: ${deviceLabel}.` });
   }
 
   if (deviceName && host && existingDevice.deviceName === deviceName && existingDevice.host !== host) {
