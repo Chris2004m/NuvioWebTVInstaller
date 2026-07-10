@@ -97,10 +97,22 @@ The installer uses the same approach as TizenBrewInstaller:
 - reads the TV DUID;
 - opens Samsung Account login on first use and uses the internet to create the certificate;
 - creates a Samsung certificate for that TV;
-- saves the certificate in the app data folder;
+- saves the certificate in the app data folder, keyed by the TV DUID rather than its network address;
 - automatically re-signs the `.wgt` before installing it.
 
 You do not need to provide manual `.p12` files.
+
+The author certificate must remain the same for every update of an installed
+application. The installer migrates older IP-based certificate files, so a DHCP
+address change does not create a new signing identity. If older versions of the
+installer already created multiple identities for the same TV, an update rejected
+with Samsung error `118/-12` is retried with the previous identities saved for that
+DUID. The identity accepted by the TV becomes the canonical identity for future
+updates.
+
+Keep the app data folder backed up. If every copy of the author certificate used
+for the installed application is lost, Samsung does not allow an in-place update;
+the application must be removed and installed again.
 
 ## LG TV
 
