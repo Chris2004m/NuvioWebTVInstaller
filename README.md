@@ -82,6 +82,12 @@ Some Samsung TVs close generic shell setup commands such as `mkdir` or `ls` with
 that happens, the installer skips the optional shell setup/checks and continues
 with the direct upload path.
 
+If Samsung rejects the WGT with platform error `118019`, the installer reports
+that the TV is incompatible and shows the minimum Tizen version declared by the
+package. It does not attempt the SDB fallback because that cannot bypass the
+package's platform requirement. Older Samsung models can continue to use the
+TizenBrew wrapper when available.
+
 Manual equivalent for affected TVs:
 
 ```sh

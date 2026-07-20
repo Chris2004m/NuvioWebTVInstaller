@@ -860,11 +860,36 @@ async function verifySamsungRemotePackage(event, transport, localPath, remotePat
 }
 
 function isSamsungCertificateRejection(value) {
+  if (isSamsungPlatformIncompatibility(value)) {
+    return false;
+  }
   const output = String(value?.stdout || "") + "\n" + String(value?.stderr || "") + "\n" + String(value?.message || value || "");
   return /install failed\s*\[\s*118(?:\s*,[^\]]*)?\s*\]/i.test(output)
     || /check certificate error/i.test(output)
     || /invalid certificate chain/i.test(output)
     || /Samsung TV rejected the signed package/i.test(output);
+}
+
+function isSamsungPlatformIncompatibility(value) {
+  if (value?.code === "SAMSUNG_UNSUPPORTED_PLATFORM") {
+    return true;
+  }
+  const output = String(value?.stdout || "") + "\n" + String(value?.stderr || "") + "\n" + String(value?.message || value || "");
+  return /install failed\s*\[\s*(?:118019|118\s*,\s*-?19)\s*\]/i.test(output);
+}
+
+function samsungPlatformIncompatibilityError(requiredVersion = "") {
+  const modelRange = requiredVersion === "5.0" ? " (Samsung TVs from 2019 onward)" : "";
+  const requirement = requiredVersion
+    ? `This package requires Tizen ${requiredVersion} or later${modelRange}. `
+    : "This package requires a newer Samsung Tizen version. ";
+  const error = new Error(
+    "This Samsung TV is not compatible with this Nuvio package. " +
+    requirement +
+    "The standalone WGT cannot be installed on this TV; use the TizenBrew wrapper on older models."
+  );
+  error.code = "SAMSUNG_UNSUPPORTED_PLATFORM";
+  return error;
 }
 
 function throwIfSamsungOutputFailed(output, context) {
@@ -1301,6 +1326,7 @@ async function parseTizenPackageMetadata(packagePath) {
     return {
       packageId: application.getAttribute("package") || "",
       appId: application.getAttribute("id") || "",
+      requiredVersion: application.getAttribute("required_version") || "",
       extension: "wgt"
     };
   }
@@ -1312,6 +1338,7 @@ async function parseTizenPackageMetadata(packagePath) {
     return {
       packageId: manifest?.getAttribute("package") || "",
       appId: manifest?.getAttribute("package") || "",
+      requiredVersion: "",
       extension: "tpk"
     };
   }
@@ -1641,6 +1668,9 @@ async function installSamsungPackage(event, transport, packagePath) {
       throwIfSamsungOutputFailed(output, `vd_appinstall failed with ${installId}`);
       return metadata;
     } catch (error) {
+      if (isSamsungPlatformIncompatibility(error)) {
+        throw samsungPlatformIncompatibilityError(metadata.requiredVersion);
+      }
       lastError = error;
       emit(event, {
         type: "error",
@@ -1782,6 +1812,9 @@ async function runSamsung(event, action, options) {
     }
 
     if (directInstallError) {
+      if (isSamsungPlatformIncompatibility(directInstallError)) {
+        throw directInstallError;
+      }
       if (isSamsungCertificateRejection(directInstallError)) {
         throw new Error(
           `${directInstallError.message}\n\n` +
@@ -1897,7 +1930,9 @@ if (process.env.NUVIO_INSTALLER_TEST === "1") {
     getSamsungCertificateDuidConfigPath,
     getSamsungCertificateFingerprint,
     isSamsungCertificateRejection,
+    isSamsungPlatformIncompatibility,
     readSamsungCertificateCandidates,
+    samsungPlatformIncompatibilityError,
     writeSamsungCertificateConfigFile
   };
 }
