@@ -289,16 +289,26 @@ btnCopyLog.addEventListener('click', async () => {
     .join('\n');
   if (!logText.trim()) return;
 
-  window.installer?.copyText?.(logText);
   const originalLabel = btnCopyLog.getAttribute('aria-label');
-  btnCopyLog.classList.add('copied');
-  btnCopyLog.setAttribute('aria-label', 'Log copied');
-  btnCopyLog.setAttribute('title', 'Copied');
-  setTimeout(() => {
-    btnCopyLog.classList.remove('copied');
-    btnCopyLog.setAttribute('aria-label', originalLabel || 'Copy installation log');
-    btnCopyLog.setAttribute('title', 'Copy log');
-  }, 1400);
+  try {
+    const copied = await window.installer?.copyText?.(logText);
+    if (!copied) {
+      throw new Error('Clipboard verification failed.');
+    }
+    btnCopyLog.classList.add('copied');
+    btnCopyLog.setAttribute('aria-label', 'Log copied');
+    btnCopyLog.setAttribute('title', 'Copied');
+  } catch (error) {
+    btnCopyLog.setAttribute('aria-label', 'Copy failed');
+    btnCopyLog.setAttribute('title', 'Copy failed');
+    appendLog(`Unable to copy log: ${error.message || error}`, 'error');
+  } finally {
+    setTimeout(() => {
+      btnCopyLog.classList.remove('copied');
+      btnCopyLog.setAttribute('aria-label', originalLabel || 'Copy installation log');
+      btnCopyLog.setAttribute('title', 'Copy log');
+    }, 1400);
+  }
 });
 
 btnClearLog.addEventListener('click', () => {

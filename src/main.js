@@ -1,5 +1,5 @@
 
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, clipboard, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -2000,6 +2000,11 @@ ipcMain.handle("installer:getConfig", async () => ({
 ipcMain.handle("installer:getRecentReleases", async (_event, platform) => getRecentReleases(platform));
 
 ipcMain.handle("installer:getLgDevices", async () => listRegisteredLgDevices());
+
+ipcMain.handle("installer:copyText", async (_event, text) => {
+  clipboard.writeText(String(text || ""));
+  return true;
+});
 
 if (process.env.NUVIO_INSTALLER_TEST === "1") {
   module.exports = {
