@@ -301,17 +301,58 @@ async function downloadFile(event, url, targetPath) {
   });
 }
 
-async function resolveReleaseAsset(event, platform) {
+function releaseAssetForPlatform(release, platform) {
   const platformConfig = config[platform];
-  const release = await fetchJson(`https://api.github.com/repos/${config.githubRepo}/releases/latest`);
   const matcher = new RegExp(platformConfig.assetPattern, "i");
-  const asset = release.assets.find((item) => matcher.test(item.name));
+  return Array.isArray(release?.assets)
+    ? release.assets.find((item) => matcher.test(item.name))
+    : null;
+}
 
-  if (!asset) {
-    throw new Error(`No ${platform} asset matching ${platformConfig.assetPattern} found in latest release.`);
+function normalizeReleasePlatform(platform) {
+  const normalized = String(platform || "").trim().toLowerCase();
+  if (normalized === "lg") return "webos";
+  if (normalized === "samsung") return "tizen";
+  return normalized;
+}
+
+async function getRecentReleases(platform, limit = 3) {
+  const releasePlatform = normalizeReleasePlatform(platform);
+  if (!config[releasePlatform]) {
+    throw new Error(`Unsupported platform: ${platform}`);
   }
 
-  const cacheDir = path.join(app.getPath("userData"), "packages", release.tag_name || "latest");
+  const releases = await fetchJson(`https://api.github.com/repos/${config.githubRepo}/releases?per_page=20`);
+  return releases
+    .filter((release) => !release.draft && releaseAssetForPlatform(release, releasePlatform))
+    .slice(0, limit)
+    .map((release) => ({
+      id: release.id,
+      tagName: release.tag_name,
+      name: release.name || release.tag_name,
+      publishedAt: release.published_at,
+      prerelease: Boolean(release.prerelease)
+    }));
+}
+
+async function resolveReleaseAsset(event, platform, releaseId) {
+  const normalizedReleaseId = String(releaseId || "").trim();
+  if (normalizedReleaseId && !/^\d+$/.test(normalizedReleaseId)) {
+    throw new Error("Invalid GitHub release selection.");
+  }
+
+  const releaseUrl = normalizedReleaseId
+    ? `https://api.github.com/repos/${config.githubRepo}/releases/${normalizedReleaseId}`
+    : `https://api.github.com/repos/${config.githubRepo}/releases/latest`;
+  const release = await fetchJson(releaseUrl);
+  const asset = releaseAssetForPlatform(release, platform);
+
+  if (!asset) {
+    throw new Error(`No ${platform} package was found in GitHub release ${release.tag_name || normalizedReleaseId || "latest"}.`);
+  }
+
+  const cacheKey = String(release.tag_name || normalizedReleaseId || "latest").replace(/[^a-z0-9._-]+/gi, "-");
+  const cacheDir = path.join(app.getPath("userData"), "packages", cacheKey);
   const targetPath = path.join(cacheDir, asset.name);
 
   try {
@@ -360,7 +401,7 @@ async function runLg(event, action, options) {
     return;
   }
 
-  const packagePath = options.packagePath || await resolveReleaseAsset(event, "webos");
+  const packagePath = options.packagePath || await resolveReleaseAsset(event, "webos", options.releaseId);
   await runCommand(event, aresInstall, ["--device", device, packagePath]);
 }
 
@@ -386,6 +427,37 @@ async function readLgDevices() {
   } catch {
     return [];
   }
+}
+
+async function listRegisteredLgDevices() {
+  const devices = await readLgDevices();
+  const registered = await Promise.all(devices.map(async (entry) => {
+    const name = String(entry?.name || "").trim();
+    const host = String(entry?.host || "").trim();
+    const privateKey = String(entry?.privateKey?.openSsh || "").trim();
+    if (!name || !privateKey) {
+      return null;
+    }
+
+    try {
+      await fsp.access(path.join(os.homedir(), ".ssh", privateKey), fs.constants.R_OK);
+      return { name, host, default: isDefaultLgDevice(entry) };
+    } catch {
+      return null;
+    }
+  }));
+
+  const uniqueDevices = new Map();
+  registered.filter(Boolean).forEach((device) => {
+    const key = `${device.name.toLowerCase()}\u0000${device.host.toLowerCase()}`;
+    const existing = uniqueDevices.get(key);
+    if (!existing || (!existing.default && device.default)) {
+      uniqueDevices.set(key, device);
+    }
+  });
+
+  return Array.from(uniqueDevices.values())
+    .sort((left, right) => Number(right.default) - Number(left.default) || left.name.localeCompare(right.name));
 }
 
 function isDefaultLgDevice(entry) {
@@ -1757,7 +1829,7 @@ async function runSamsung(event, action, options) {
       return;
     }
 
-    const packagePath = options.packagePath || await resolveReleaseAsset(event, "tizen");
+    const packagePath = options.packagePath || await resolveReleaseAsset(event, "tizen", options.releaseId);
     const preparedPackage = await prepareSamsungPackage(event, transport, packagePath, options);
     let installPackagePath = "";
     let activeCertificateConfig = null;
@@ -1924,6 +1996,10 @@ ipcMain.handle("installer:getConfig", async () => ({
   platform: os.platform(),
   localIps: getLocalIPv4Addresses()
 }));
+
+ipcMain.handle("installer:getRecentReleases", async (_event, platform) => getRecentReleases(platform));
+
+ipcMain.handle("installer:getLgDevices", async () => listRegisteredLgDevices());
 
 if (process.env.NUVIO_INSTALLER_TEST === "1") {
   module.exports = {

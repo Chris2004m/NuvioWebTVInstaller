@@ -20,7 +20,11 @@ const modeCards = document.querySelectorAll('#view-mode .select-card');
 const instTitle = document.getElementById('inst-title');
 const instSubtitle = document.getElementById('inst-subtitle');
 const instBadge = document.getElementById('inst-badge');
+const releaseFields = document.getElementById('release-fields');
+const releaseVersionInput = document.getElementById('releaseVersion');
+const releaseStatus = document.getElementById('release-status');
 const lgFields = document.getElementById('lg-fields');
+const lgDevicePicker = document.getElementById('lgDevicePicker');
 const customFields = document.getElementById('custom-fields');
 const samsungCertOptions = document.getElementById('samsung-cert-options');
 const autoGenerateCert = document.getElementById('autoGenerateCert');
@@ -42,14 +46,79 @@ const logOutput = document.getElementById('log-output');
 let localIps = [];
 let showHostPcIp = false;
 let actionInProgress = false;
+let lgDevices = [];
+let releaseRequestId = 0;
 
-async function loadLocalIps() {
+async function loadInstallerData() {
   const config = await window.installer?.getConfig?.();
   localIps = config?.localIps || [];
+  await refreshLgDevices();
   setupInstallerUI();
 }
 
-loadLocalIps();
+loadInstallerData();
+
+function renderLgDevices(selectedName = lgDevicePicker.value) {
+  lgDevicePicker.innerHTML = '<option value="">New or manually configured device</option>';
+  lgDevices.forEach((device) => {
+    const option = document.createElement('option');
+    option.value = device.name;
+    option.textContent = device.host ? `${device.name} (${device.host})` : device.name;
+    lgDevicePicker.appendChild(option);
+  });
+  lgDevicePicker.value = lgDevices.some((device) => device.name === selectedName) ? selectedName : '';
+}
+
+async function refreshLgDevices(selectedName) {
+  try {
+    lgDevices = await window.installer?.getLgDevices?.() || [];
+    renderLgDevices(selectedName);
+  } catch (error) {
+    lgDevices = [];
+    renderLgDevices();
+    appendLog(`Unable to load saved LG devices: ${error.message || error}`, 'error');
+  }
+}
+
+lgDevicePicker.addEventListener('change', () => {
+  const device = lgDevices.find((item) => item.name === lgDevicePicker.value);
+  document.getElementById('deviceName').value = device?.name || '';
+  document.getElementById('ip').value = device?.host || '';
+  document.getElementById('lgPassphrase').value = '';
+});
+
+async function loadRecentReleases(platform) {
+  const requestId = ++releaseRequestId;
+  releaseVersionInput.disabled = true;
+  releaseVersionInput.innerHTML = '<option value="">Loading GitHub releases...</option>';
+  releaseStatus.textContent = 'Fetching compatible versions from GitHub...';
+
+  try {
+    const releases = await window.installer?.getRecentReleases?.(platform) || [];
+    if (requestId !== releaseRequestId) return;
+
+    releaseVersionInput.innerHTML = '';
+    releases.forEach((release, index) => {
+      const option = document.createElement('option');
+      option.value = String(release.id);
+      const label = release.name && release.name !== release.tagName
+        ? `${release.tagName} — ${release.name}`
+        : release.tagName;
+      option.textContent = `${index === 0 ? 'Latest: ' : ''}${label}${release.prerelease ? ' (pre-release)' : ''}`;
+      releaseVersionInput.appendChild(option);
+    });
+
+    releaseVersionInput.disabled = releases.length === 0;
+    releaseStatus.textContent = releases.length
+      ? `Choose one of the latest ${releases.length} compatible GitHub ${releases.length === 1 ? 'release' : 'releases'}.`
+      : `No compatible ${platform === 'tizen' ? 'WGT' : 'IPK'} release was found.`;
+  } catch (error) {
+    if (requestId !== releaseRequestId) return;
+    releaseVersionInput.innerHTML = '<option value="">GitHub releases unavailable</option>';
+    releaseStatus.textContent = error.message || String(error);
+    appendLog(`Unable to load GitHub releases: ${error.message || error}`, 'error');
+  }
+}
 
 // Navigation
 function setView(newView) {
@@ -99,6 +168,9 @@ modeCards.forEach(card => {
     state.mode = card.dataset.mode;
     setupInstallerUI();
     setView('installer');
+    if (state.mode === 'simple') {
+      loadRecentReleases(state.os);
+    }
   });
 });
 
@@ -118,7 +190,7 @@ function setupInstallerUI() {
   }
   
   instSubtitle.innerText = isSimple 
-    ? "Automatically downloading latest release from GitHub."
+    ? "Choose and install one of the latest GitHub releases."
     : "Using custom local package.";
 
   // Notice
@@ -144,6 +216,7 @@ function setupInstallerUI() {
   }
 
   // Fields
+  releaseFields.classList.toggle('hidden', !isSimple || isMulti);
   lgFields.classList.toggle('hidden', isSamsung && !isMulti);
   customFields.classList.toggle('hidden', isSimple);
   
@@ -252,6 +325,7 @@ async function runAction(action) {
   const deviceName = document.getElementById('deviceName').value.trim();
   const lgPassphrase = document.getElementById('lgPassphrase').value.trim();
   const packagePath = packagePathInput.value;
+  const releaseId = releaseVersionInput.value;
 
   // Determine target OS based on state or heuristics if multi
   let targetOs = state.os;
@@ -275,12 +349,18 @@ async function runAction(action) {
     return;
   }
 
+  if (state.mode === 'simple' && action === 'install' && !releaseId) {
+    appendLog("Error: Select a GitHub version before installing.", "error");
+    return;
+  }
+
   const options = {
     ip,
     mode: state.mode,
     deviceName,
     lgPassphrase,
     packagePath,
+    releaseId,
     samsungCert: {
       auto: autoGenerateCert.checked,
       authorPath: authorCertPathInput.value,
@@ -297,6 +377,8 @@ async function runAction(action) {
       const res = await window.installer.run(targetOs, action, options);
       if (!res.ok) {
         appendLog(`Failed: ${res.error}`, 'error');
+      } else if (targetOs === 'lg' && action === 'install') {
+        await refreshLgDevices(deviceName);
       }
     } finally {
       setActionInProgress(false);

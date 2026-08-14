@@ -299,7 +299,8 @@ p.subtitle {
   font-weight: 500;
 }
 
-.form-group input {
+.form-group input,
+.form-group select {
   background: rgba(0,0,0,0.4);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -310,9 +311,28 @@ p.subtitle {
   transition: all 0.2s ease;
   outline: none;
 }
-.form-group input:focus {
+.form-group select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%), linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
+  background-position: calc(100% - 20px) calc(50% - 3px), calc(100% - 14px) calc(50% - 3px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+  padding-right: 42px;
+}
+.form-group select:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.form-group input:focus,
+.form-group select:focus {
   border-color: var(--border-active);
   box-shadow: 0 0 0 4px rgba(255,255,255,0.05);
+}
+.field-help {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.4;
 }
 .form-group input::placeholder {
   color: rgba(255,255,255,0.2);

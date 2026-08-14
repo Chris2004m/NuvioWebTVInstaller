@@ -91,6 +91,14 @@
           </div>
 
           <form id="install-form" style="display:flex; flex-direction:column; flex:1;">
+
+            <div class="form-group hidden" id="release-fields">
+              <label for="releaseVersion">Version</label>
+              <select id="releaseVersion" disabled>
+                <option value="">Loading GitHub releases...</option>
+              </select>
+              <p class="field-help" id="release-status">The latest three compatible versions are loaded automatically.</p>
+            </div>
             
             <div class="form-group">
               <label for="ip">TV IP Address</label>
@@ -99,6 +107,13 @@
 
             <!-- LG Specific -->
             <div id="lg-fields" class="hidden">
+              <div class="form-group" id="lg-device-picker-fields">
+                <label for="lgDevicePicker">Registered LG Device</label>
+                <select id="lgDevicePicker">
+                  <option value="">New or manually configured device</option>
+                </select>
+                <p class="field-help">Select a saved profile to fill in its name and IP. You can still edit the IP before installing.</p>
+              </div>
               <div class="form-group">
                 <label for="deviceName">Ares Device Name (Optional)</label>
                 <input type="text" id="deviceName" placeholder="tv-lg-livingroom" autocomplete="off" />
