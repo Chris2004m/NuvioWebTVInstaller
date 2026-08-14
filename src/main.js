@@ -1,5 +1,5 @@
 
-const { app, BrowserWindow, clipboard, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -164,8 +164,13 @@ function runCommand(event, command, args, options = {}) {
       env: spawnSpec.env
     });
 
+    let stderr = "";
     child.stdout.on("data", (chunk) => emit(event, { type: "stdout", text: chunk.toString() }));
-    child.stderr.on("data", (chunk) => emit(event, { type: "stderr", text: chunk.toString() }));
+    child.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      emit(event, { type: "stderr", text });
+    });
     child.on("error", reject);
     child.on("exit", (code) => {
       if (code === 0) {
@@ -173,6 +178,7 @@ function runCommand(event, command, args, options = {}) {
       } else {
         const error = new Error(`${command} exited with code ${code}`);
         error.code = code;
+        error.stderr = stderr;
         reject(error);
       }
     });
@@ -402,7 +408,17 @@ async function runLg(event, action, options) {
   }
 
   const packagePath = options.packagePath || await resolveReleaseAsset(event, "webos", options.releaseId);
-  await runCommand(event, aresInstall, ["--device", device, packagePath]);
+  try {
+    await runCommand(event, aresInstall, ["--device", device, packagePath]);
+  } catch (error) {
+    const errorDetails = `${error?.message || ""}\n${error?.stderr || ""}`;
+    if (!passphrase && /authentication methods failed|ssh exec failure/i.test(errorDetails)) {
+      throw new Error(
+        `LG authentication failed for device "${device}". Enter the current Developer Mode passphrase and press Install again to overwrite the saved profile and SSH key.`
+      );
+    }
+    throw error;
+  }
 }
 
 function defaultLgDeviceName(ip) {
@@ -435,23 +451,34 @@ async function listRegisteredLgDevices() {
     const name = String(entry?.name || "").trim();
     const host = String(entry?.host || "").trim();
     const privateKey = String(entry?.privateKey?.openSsh || "").trim();
-    if (!name || !privateKey) {
+    if (!name) {
       return null;
     }
 
-    try {
-      await fsp.access(path.join(os.homedir(), ".ssh", privateKey), fs.constants.R_OK);
-      return { name, host, default: isDefaultLgDevice(entry) };
-    } catch {
-      return null;
+    let keyReady = false;
+    if (privateKey) {
+      try {
+        await fsp.access(path.join(os.homedir(), ".ssh", privateKey), fs.constants.R_OK);
+        keyReady = true;
+      } catch {}
     }
+
+    return {
+      name,
+      host,
+      default: isDefaultLgDevice(entry),
+      keyReady,
+      removable: entry?.indelible !== true
+    };
   }));
 
   const uniqueDevices = new Map();
   registered.filter(Boolean).forEach((device) => {
-    const key = `${device.name.toLowerCase()}\u0000${device.host.toLowerCase()}`;
+    const key = device.name.toLowerCase();
     const existing = uniqueDevices.get(key);
-    if (!existing || (!existing.default && device.default)) {
+    const deviceScore = Number(device.keyReady) * 2 + Number(device.default);
+    const existingScore = existing ? Number(existing.keyReady) * 2 + Number(existing.default) : -1;
+    if (deviceScore > existingScore) {
       uniqueDevices.set(key, device);
     }
   });
@@ -514,10 +541,9 @@ async function resolveExistingLgDevice(event, requestedDeviceName, ip) {
   });
 
   if (!existingDevice) {
-    if (!deviceName && !host) {
-      throw new Error("No saved LG webOS device profile found. Enter the TV IP and Developer Mode passphrase once, or enter an existing Ares device name.");
-    }
-    return requireValue(deviceName || host, "LG device name/IP");
+    throw new Error(
+      "No usable SSH key was found for this LG device. Enter the TV IP and current Developer Mode passphrase, then press Install to create or overwrite the saved profile."
+    );
   }
 
   if (!deviceName && !host) {
@@ -553,27 +579,43 @@ async function configureLgDevice(event, ip, requestedDeviceName, passphrase) {
 
   emit(event, { type: "info", text: `Automatically configuring LG webOS device: ${deviceName}` });
   const deviceInfoArgs = lgDeviceInfoArgs(host);
+  const matchingDevices = (await readLgDevices()).filter((entry) => entry?.name === deviceName);
+  const canReplace = matchingDevices.length > 0 && matchingDevices.every((entry) => entry?.indelible !== true);
 
-  try {
+  if (canReplace) {
+    emit(event, { type: "info", text: `Replacing existing LG device profile "${deviceName}" and its saved authentication.` });
+    await runCommand(event, aresSetupDevice, ["--remove", deviceName]);
     await runCommand(event, aresSetupDevice, ["--add", deviceName, ...deviceInfoArgs]);
-  } catch (error) {
-    emit(event, { type: "info", text: "LG device already exists or add failed, trying modify." });
+  } else if (matchingDevices.length > 0) {
+    emit(event, { type: "info", text: `Updating protected LG device profile "${deviceName}".` });
     await runCommand(event, aresSetupDevice, ["--modify", deviceName, ...deviceInfoArgs]);
+  } else {
+    await runCommand(event, aresSetupDevice, ["--add", deviceName, ...deviceInfoArgs]);
   }
 
-  const existingDevice = await findExistingLgDeviceWithPrivateKey(deviceName, host);
-  if (existingDevice) {
-    emit(event, { type: "info", text: `Using existing LG SSH key: ${existingDevice.keyPath}` });
-    if (existingDevice.deviceName !== deviceName) {
-      emit(event, { type: "info", text: `Using existing LG device profile: ${existingDevice.deviceName}` });
-    }
-    emit(event, { type: "success", text: "LG connection configured." });
-    return existingDevice.deviceName;
-  }
-
+  emit(event, { type: "info", text: `Downloading and overwriting the SSH key for "${deviceName}".` });
   await runCommand(event, aresNovacom, ["--device", deviceName, "--getkey", "--passphrase", passphrase]);
-  emit(event, { type: "success", text: "LG connection configured." });
+  emit(event, { type: "success", text: "LG profile and SSH key saved." });
   return deviceName;
+}
+
+async function deleteLgDevice(event, requestedDeviceName) {
+  const deviceName = requireValue(requestedDeviceName, "LG device name");
+  const matchingDevices = (await readLgDevices()).filter((entry) => entry?.name === deviceName);
+  if (!matchingDevices.length) {
+    throw new Error(`LG device profile "${deviceName}" was not found.`);
+  }
+  if (matchingDevices.some((entry) => entry?.indelible === true)) {
+    throw new Error(`LG device profile "${deviceName}" is protected by the webOS CLI and cannot be deleted.`);
+  }
+
+  const aresSetupDevice = await resolveCommand("ares-setup-device");
+  if (!aresSetupDevice) {
+    throw new Error("ares-setup-device was not found in the app package.");
+  }
+
+  await runCommand(event, aresSetupDevice, ["--remove", deviceName]);
+  emit(event, { type: "success", text: `LG device profile "${deviceName}" deleted.` });
 }
 
 function parseSdbTarget(output, ip) {
@@ -1976,7 +2018,6 @@ ipcMain.handle("installer:run", async (event, request) => {
   }
 });
 
-const { dialog } = require('electron');
 ipcMain.handle("installer:selectFile", async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
     properties: ['openFile'],
@@ -2000,6 +2041,27 @@ ipcMain.handle("installer:getConfig", async () => ({
 ipcMain.handle("installer:getRecentReleases", async (_event, platform) => getRecentReleases(platform));
 
 ipcMain.handle("installer:getLgDevices", async () => listRegisteredLgDevices());
+
+ipcMain.handle("installer:deleteLgDevice", async (event, deviceName) => {
+  const normalizedName = requireValue(deviceName, "LG device name");
+  const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+  const confirmation = await dialog.showMessageBox(ownerWindow, {
+    type: "warning",
+    buttons: ["Cancel", "Delete Device"],
+    defaultId: 0,
+    cancelId: 0,
+    title: "Delete LG Device",
+    message: `Delete the saved LG device "${normalizedName}"?`,
+    detail: "This removes the device profile from the webOS CLI. You will need the TV IP and Developer Mode passphrase to add it again."
+  });
+
+  if (confirmation.response !== 1) {
+    return { ok: false, cancelled: true };
+  }
+
+  await deleteLgDevice(event, normalizedName);
+  return { ok: true };
+});
 
 ipcMain.handle("installer:copyText", async (_event, text) => {
   clipboard.writeText(String(text || ""));

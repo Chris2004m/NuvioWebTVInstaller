@@ -109,9 +109,14 @@
             <div id="lg-fields" class="hidden">
               <div class="form-group" id="lg-device-picker-fields">
                 <label for="lgDevicePicker">Registered LG Device</label>
-                <select id="lgDevicePicker">
-                  <option value="">New or manually configured device</option>
-                </select>
+                <div class="device-picker-row">
+                  <select id="lgDevicePicker">
+                    <option value="">New or manually configured device</option>
+                  </select>
+                  <button type="button" class="device-delete-button" id="btn-delete-lg-device" title="Delete selected LG device" aria-label="Delete selected LG device" disabled>
+                    <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>
+                  </button>
+                </div>
                 <p class="field-help">Select a saved profile to fill in its name and IP. You can still edit the IP before installing.</p>
               </div>
               <div class="form-group">

@@ -25,6 +25,7 @@ const releaseVersionInput = document.getElementById('releaseVersion');
 const releaseStatus = document.getElementById('release-status');
 const lgFields = document.getElementById('lg-fields');
 const lgDevicePicker = document.getElementById('lgDevicePicker');
+const btnDeleteLgDevice = document.getElementById('btn-delete-lg-device');
 const customFields = document.getElementById('custom-fields');
 const samsungCertOptions = document.getElementById('samsung-cert-options');
 const autoGenerateCert = document.getElementById('autoGenerateCert');
@@ -48,6 +49,7 @@ let showHostPcIp = false;
 let actionInProgress = false;
 let lgDevices = [];
 let releaseRequestId = 0;
+let lgDeviceDeleteInProgress = false;
 
 async function loadInstallerData() {
   const config = await window.installer?.getConfig?.();
@@ -63,10 +65,17 @@ function renderLgDevices(selectedName = lgDevicePicker.value) {
   lgDevices.forEach((device) => {
     const option = document.createElement('option');
     option.value = device.name;
-    option.textContent = device.host ? `${device.name} (${device.host})` : device.name;
+    const deviceLabel = device.host ? `${device.name} (${device.host})` : device.name;
+    option.textContent = `${deviceLabel}${device.keyReady ? '' : ' — passphrase required'}`;
     lgDevicePicker.appendChild(option);
   });
   lgDevicePicker.value = lgDevices.some((device) => device.name === selectedName) ? selectedName : '';
+  updateLgDeleteButton();
+}
+
+function updateLgDeleteButton() {
+  const selectedDevice = lgDevices.find((device) => device.name === lgDevicePicker.value);
+  btnDeleteLgDevice.disabled = lgDeviceDeleteInProgress || !selectedDevice?.removable;
 }
 
 async function refreshLgDevices(selectedName) {
@@ -85,6 +94,29 @@ lgDevicePicker.addEventListener('change', () => {
   document.getElementById('deviceName').value = device?.name || '';
   document.getElementById('ip').value = device?.host || '';
   document.getElementById('lgPassphrase').value = '';
+  updateLgDeleteButton();
+});
+
+btnDeleteLgDevice.addEventListener('click', async () => {
+  const device = lgDevices.find((item) => item.name === lgDevicePicker.value);
+  if (!device?.removable || lgDeviceDeleteInProgress) return;
+
+  lgDeviceDeleteInProgress = true;
+  updateLgDeleteButton();
+  try {
+    const result = await window.installer?.deleteLgDevice?.(device.name);
+    if (!result?.ok) return;
+
+    document.getElementById('deviceName').value = '';
+    document.getElementById('ip').value = '';
+    document.getElementById('lgPassphrase').value = '';
+    await refreshLgDevices();
+  } catch (error) {
+    appendLog(`Unable to delete LG device: ${error.message || error}`, 'error');
+  } finally {
+    lgDeviceDeleteInProgress = false;
+    updateLgDeleteButton();
+  }
 });
 
 async function loadRecentReleases(platform) {

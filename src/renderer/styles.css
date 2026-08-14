@@ -323,6 +323,28 @@ p.subtitle {
   cursor: wait;
   opacity: 0.65;
 }
+.device-picker-row {
+  display: flex;
+  gap: 8px;
+}
+.device-picker-row select {
+  flex: 1;
+  min-width: 0;
+}
+.device-delete-button {
+  flex: 0 0 52px;
+  color: var(--danger);
+  background: transparent;
+  border: 1px solid rgba(207, 102, 121, 0.3);
+}
+.device-delete-button:hover:not(:disabled) {
+  background: var(--danger-hover);
+  border-color: var(--danger);
+}
+.device-delete-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
 .form-group input:focus,
 .form-group select:focus {
   border-color: var(--border-active);
